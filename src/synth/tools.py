@@ -6,6 +6,7 @@ the agent can observe the failure and choose a different approach.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -17,6 +18,11 @@ from synth.constants import BASH_TIMEOUT, MAX_FILE_SIZE, MAX_OUTPUT_SIZE
 # Match paths containing '..' (parent traversal). Commented per rules 2.5:
 # this is the traversal guard, not a general filter.
 PATH_TRAVERSAL = re.compile(r"\.\.")
+
+
+def _is_godmode_active() -> bool:
+    """Check if godmode is enabled via environment variable."""
+    return os.environ.get("GODMODE", "0") == "1"
 
 
 @dataclass(frozen=True)
@@ -167,10 +173,15 @@ def make_read_file_tool(max_file_size: int = MAX_FILE_SIZE, max_output_size: int
 
     def _read_file(args: dict[str, Any]) -> ToolResult:
         path = args.get("path")
-        try:
-            resolved = safe_path(str(path), Path.cwd())
-        except ValueError as exc:
-            return ToolResult(f"Error: {exc}", is_error=True)
+        
+        # Godmode: bypass path safety checks
+        if _is_godmode_active():
+            resolved = Path(path).resolve()
+        else:
+            try:
+                resolved = safe_path(str(path), Path.cwd())
+            except ValueError as exc:
+                return ToolResult(f"Error: {exc}", is_error=True)
 
         if not resolved.exists():
             return ToolResult(f"Error: file not found: {resolved}", is_error=True)
@@ -179,18 +190,23 @@ def make_read_file_tool(max_file_size: int = MAX_FILE_SIZE, max_output_size: int
         if not resolved.is_file():
             return ToolResult(f"Error: not a regular file: {resolved}", is_error=True)
 
-        size = resolved.stat().st_size
-        if size > max_file_size:
-            return ToolResult(
-                f"Error: file is {size} bytes (limit {max_file_size}): {resolved}",
-                is_error=True,
-            )
+        # Godmode: bypass file size limits
+        if not _is_godmode_active():
+            size = resolved.stat().st_size
+            if size > max_file_size:
+                return ToolResult(
+                    f"Error: file is {size} bytes (limit {max_file_size}): {resolved}",
+                    is_error=True,
+                )
 
         try:
             content = resolved.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             return ToolResult(f"Error: cannot read {resolved}: {exc}", is_error=True)
 
+        # Godmode: bypass output truncation
+        if _is_godmode_active():
+            return ToolResult(content)
         return ToolResult(_truncate(content, max_output_size))
 
     return _read_file
@@ -214,14 +230,21 @@ def make_write_file_tool(max_file_size: int = MAX_FILE_SIZE) -> ToolFunc:
     def _write_file(args: dict[str, Any]) -> ToolResult:
         path = args.get("path")
         content = args.get("content", "")
-        try:
-            resolved = safe_path(str(path), Path.cwd())
-        except ValueError as exc:
-            return ToolResult(f"Error: {exc}", is_error=True)
+        
+        # Godmode: bypass path safety checks
+        if _is_godmode_active():
+            resolved = Path(path).resolve()
+        else:
+            try:
+                resolved = safe_path(str(path), Path.cwd())
+            except ValueError as exc:
+                return ToolResult(f"Error: {exc}", is_error=True)
 
         if not isinstance(content, str):
             return ToolResult("Error: content must be a string", is_error=True)
-        if len(content.encode("utf-8", errors="replace")) > max_file_size:
+        
+        # Godmode: bypass content size limits
+        if not _is_godmode_active() and len(content.encode("utf-8", errors="replace")) > max_file_size:
             return ToolResult(
                 f"Error: content exceeds {max_file_size} bytes",
                 is_error=True,
@@ -257,12 +280,15 @@ def make_bash_tool(timeout: int = BASH_TIMEOUT, max_output_size: int = MAX_OUTPU
         if not isinstance(command, str) or not command.strip():
             return ToolResult("Error: command must be a non-empty string", is_error=True)
 
+        # Godmode: bypass timeout
+        actual_timeout = None if _is_godmode_active() else timeout
+
         try:
             proc = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
-                timeout=timeout,
+                timeout=actual_timeout,
                 cwd=str(Path.cwd()),
             )
         except subprocess.TimeoutExpired:
@@ -276,6 +302,10 @@ def make_bash_tool(timeout: int = BASH_TIMEOUT, max_output_size: int = MAX_OUTPU
         stdout = proc.stdout.decode("utf-8", errors="replace")
         stderr = proc.stderr.decode("utf-8", errors="replace")
         output = f"exit_code={proc.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        
+        # Godmode: bypass output truncation
+        if _is_godmode_active():
+            return ToolResult(output)
         return ToolResult(_truncate(output, max_output_size))
 
     return _bash

@@ -32,6 +32,11 @@ from synth.tools import (
     safe_path,
 )
 
+def _is_godmode_active() -> bool:
+    """Check if godmode is enabled via environment variable."""
+    import os
+    return os.environ.get("GODMODE", "0") == "1"
+
 # --- Limits (module-local: specific to the search/edit tools) ---
 
 # Cap on glob results. A '**/*' over a large tree can yield thousands of
@@ -89,22 +94,28 @@ def make_edit_file_tool(max_file_size: int = MAX_FILE_SIZE) -> ToolFunc:
         if not isinstance(new_string, str):
             return ToolResult("Error: new_string must be a string", is_error=True)
 
-        try:
-            resolved = safe_path(str(path), Path.cwd())
-        except ValueError as exc:
-            return ToolResult(f"Error: {exc}", is_error=True)
+        # Godmode: bypass path safety checks
+        if _is_godmode_active():
+            resolved = Path(path).resolve()
+        else:
+            try:
+                resolved = safe_path(str(path), Path.cwd())
+            except ValueError as exc:
+                return ToolResult(f"Error: {exc}", is_error=True)
 
         if not resolved.exists():
             return ToolResult(f"Error: file not found: {resolved}", is_error=True)
         if not resolved.is_file():
             return ToolResult(f"Error: not a regular file: {resolved}", is_error=True)
 
-        size = resolved.stat().st_size
-        if size > max_file_size:
-            return ToolResult(
-                f"Error: file is {size} bytes (limit {max_file_size}): {resolved}",
-                is_error=True,
-            )
+        # Godmode: bypass file size limits
+        if not _is_godmode_active():
+            size = resolved.stat().st_size
+            if size > max_file_size:
+                return ToolResult(
+                    f"Error: file is {size} bytes (limit {max_file_size}): {resolved}",
+                    is_error=True,
+                )
 
         try:
             content = resolved.read_text(encoding="utf-8", errors="replace")
@@ -182,16 +193,21 @@ def make_glob_tool(
 
         # An absolute pattern would escape the base directory entirely, so
         # it is rejected up front rather than passed to pathlib.
-        if Path(pattern).is_absolute():
+        # Godmode: allow absolute patterns
+        if not _is_godmode_active() and Path(pattern).is_absolute():
             return ToolResult(
                 f"Error: pattern must be relative, not absolute: {pattern}",
                 is_error=True,
             )
 
-        try:
-            base = safe_path(str(search_path), Path.cwd())
-        except ValueError as exc:
-            return ToolResult(f"Error: {exc}", is_error=True)
+        # Godmode: bypass path safety checks
+        if _is_godmode_active():
+            base = Path(search_path).resolve()
+        else:
+            try:
+                base = safe_path(str(search_path), Path.cwd())
+            except ValueError as exc:
+                return ToolResult(f"Error: {exc}", is_error=True)
 
         if not base.is_dir():
             return ToolResult(f"Error: not a directory: {base}", is_error=True)
@@ -205,6 +221,11 @@ def make_glob_tool(
 
         if not matches:
             return ToolResult("No files matched")
+
+        # Godmode: bypass result caps
+        if _is_godmode_active():
+            text = "\n".join(str(p) for p in matches)
+            return ToolResult(text)
 
         # Cap the count first, then the byte length, so both bounds hold.
         capped = matches[:max_results]
@@ -281,14 +302,20 @@ def make_grep_tool(
         except re.error as exc:
             return ToolResult(f"Error: invalid regex '{pattern}': {exc}", is_error=True)
 
-        try:
-            base = safe_path(str(search_path), Path.cwd())
-        except ValueError as exc:
-            return ToolResult(f"Error: {exc}", is_error=True)
+        # Godmode: bypass path safety checks
+        if _is_godmode_active():
+            base = Path(search_path).resolve()
+        else:
+            try:
+                base = safe_path(str(search_path), Path.cwd())
+            except ValueError as exc:
+                return ToolResult(f"Error: {exc}", is_error=True)
 
         if isinstance(limit, bool) or not isinstance(limit, int):
             limit = max_results
-        limit = max(0, min(limit, max_results))
+        # Godmode: bypass result limits
+        if not _is_godmode_active():
+            limit = max(0, min(limit, max_results))
 
         # A single file is searched directly; a directory is walked.
         if base.is_file():
@@ -304,19 +331,22 @@ def make_grep_tool(
         lines_out: list[str] = []
         matched = 0
         for candidate in candidates:
-            if matched >= limit:
+            if matched >= limit and not _is_godmode_active():
                 break
 
             if include is not None and not fnmatch.fnmatch(candidate.name, str(include)):
                 continue
 
-            try:
-                if candidate.stat().st_size > max_file_size:
+            # Godmode: bypass file size limits
+            if not _is_godmode_active():
+                try:
+                    if candidate.stat().st_size > max_file_size:
+                        continue
+                except OSError:
                     continue
-            except OSError:
-                continue
 
-            if _is_binary(candidate):
+            # Godmode: bypass binary file detection
+            if not _is_godmode_active() and _is_binary(candidate):
                 continue
 
             try:
@@ -328,13 +358,16 @@ def make_grep_tool(
                 if regex.search(line):
                     lines_out.append(f"{candidate}:{lineno}: {line}")
                     matched += 1
-                    if matched >= limit:
+                    if matched >= limit and not _is_godmode_active():
                         break
 
         if not lines_out:
             return ToolResult("No matches")
 
         output = "\n".join(lines_out)
+        # Godmode: bypass output truncation
+        if _is_godmode_active():
+            return ToolResult(output)
         return ToolResult(_truncate(output, max_output_size))
 
     return _grep

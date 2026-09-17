@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -41,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("prompt", nargs="?", help="Task for the agent")
     parser.add_argument("--resume", metavar="ID", help="Resume an existing session")
     parser.add_argument("--session", metavar="ACTION", help="Session actions: list")
+    parser.add_argument(
+        "--godmode",
+        action="store_true",
+        help="Enable godmode: unrestricted access (use with extreme caution)",
+    )
     parser.add_argument("--model", metavar="MODEL", help="Override the config model")
     parser.add_argument(
         "--mode",
@@ -49,12 +55,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Agent mode: plan, act (default), auto, architect",
     )
     parser.add_argument(
-        "--no-memory", action="store_true", help="Disable memory block injection"
+        "--checkpoint",
+        metavar="TAG",
+        help="Create a checkpoint with the given tag before running",
     )
     parser.add_argument(
-        "--no-extended-tools",
+        "--undo",
         action="store_true",
-        help="Use only the 3 basic tools (read_file/write_file/bash)",
+        help="Undo the last step in the current session before running",
+    )
+    parser.add_argument(
+        "--swarm",
+        action="store_true",
+        help="Enable multi-agent supervisor mode",
     )
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
     parser.add_argument("--verbose", action="store_true", help="Debug logs")
@@ -108,6 +121,13 @@ def main(argv: list[str] | None = None) -> int:
         api_key=api_key,
         stream_printer=_stream_printer if not args.no_stream else None,
     )
+    # Handle godmode activation
+    if args.godmode:
+        os.environ["GODMODE"] = "1"
+        console.print("[red]⚠[/red] Godmode enabled: all safety boundaries disabled")
+    else:
+        os.environ.pop("GODMODE", None)
+
     tools = extended_registry(
         bash_timeout=config.tools.bash_timeout,
         max_file_size=config.tools.max_file_size,
@@ -125,13 +145,22 @@ def main(argv: list[str] | None = None) -> int:
 
     # Load memory block (spec 6.3): user facts + recent lessons.
     memory_block = ""
-    if not args.no_memory:
+    try:
+        with MemoryStore() as mem:
+            memory_block = build_memory_prompt(mem)
+    except MemoryError as exc:
+        console.print(f"[yellow]Warning:[/yellow] memory unavailable: {exc}")
+        memory_block = ""
+
+    # Handle checkpoints and undo (spec 6.6)
+    from synth.checkpoints import CheckpointStore, CheckpointError
+    checkpoint_store = None
+    if args.checkpoint or args.undo:
         try:
-            with MemoryStore() as mem:
-                memory_block = build_memory_prompt(mem)
-        except MemoryError as exc:
-            console.print(f"[yellow]Warning:[/yellow] memory unavailable: {exc}")
-            memory_block = ""
+            checkpoint_store = CheckpointStore()
+        except CheckpointError as exc:
+            console.print(f"[red]Error:[/red] checkpoint store unavailable: {exc}")
+            return EXIT_GENERAL
 
     try:
         store = SessionStore(config.session.db_path)
@@ -152,6 +181,40 @@ def main(argv: list[str] | None = None) -> int:
     else:
         session_id = store.create_session()
         history = []
+
+    # Handle undo before running
+    if args.undo:
+        try:
+            if checkpoint_store.undo_last_step(session_id):
+                console.print("[green]✓[/green] Last step undone")
+                # Reload history after undo
+                history = store.load_session(session_id) or []
+            else:
+                console.print("[yellow]Warning:[/yellow] Nothing to undo")
+        except CheckpointError as exc:
+            console.print(f"[red]Error:[/red] undo failed: {exc}")
+            return EXIT_GENERAL
+
+    # Handle checkpoint creation
+    if args.checkpoint:
+        try:
+            checkpoint_id = checkpoint_store.create_checkpoint(session_id, args.checkpoint)
+            console.print(f"[green]✓[/green] Checkpoint created: {checkpoint_id[:8]}")
+        except CheckpointError as exc:
+            console.print(f"[red]Error:[/red] checkpoint creation failed: {exc}")
+            return EXIT_GENERAL
+
+    # Initialize swarm if requested
+    from synth.swarm import Supervisor, SwarmError
+    if args.swarm:
+        try:
+            supervisor = Supervisor(llm, store, tools)
+            # For now, just create the supervisor - actual swarm execution
+            # will be handled in a future enhancement
+            console.print("[green]✓[/green] Multi-agent supervisor initialized")
+        except SwarmError as exc:
+            console.print(f"[red]Error:[/red] swarm initialization failed: {exc}")
+            return EXIT_GENERAL
 
     agent = Agent(
         llm=llm,

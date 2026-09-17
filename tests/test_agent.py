@@ -350,7 +350,9 @@ def test_run_passes_tool_schemas_and_stream_flag_to_llm(make_agent, registry):
 # --- build_system_prompt ---------------------------------------------------
 
 
-def test_build_system_prompt_includes_cwd():
+def test_build_system_prompt_includes_cwd(monkeypatch):
+    # Mock soul.md tidak ada agar pakai default prompt
+    monkeypatch.setattr("synth.prompts._load_soul_md", lambda: None)
     prompt = build_system_prompt("/tmp/synth-workspace")
 
     assert "Current working directory: /tmp/synth-workspace" in prompt

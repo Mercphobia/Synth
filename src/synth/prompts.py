@@ -1,16 +1,20 @@
 """System prompt templates for the Synth agent.
 
-The prompt is assembled from three dynamic parts:
-1. The base instructions (reasoning rules + tool list derived from the registry).
+The prompt is assembled from four dynamic parts:
+1. The base instructions (soul.md if present, else default rules + tool list).
 2. The active agent mode suffix (see modes.py, spec 6.1).
 3. The memory block injected from the memory store (see memory.py, spec 6.3).
 """
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from synth.tools import ToolRegistry
 
-BASE_PROMPT = """You are Synth, a CLI AI agent.
+# Default base prompt when soul.md is missing
+DEFAULT_BASE_PROMPT = """You are Synth, a CLI AI agent.
 
 You help users with software tasks by reasoning step-by-step and using tools.
 
@@ -25,6 +29,17 @@ Rules:
 
 Current working directory: {cwd}
 """
+
+
+def _load_soul_md() -> str | None:
+    """Load soul.md from ~/.synth/soul.md if it exists."""
+    try:
+        soul_path = Path.home() / ".synth" / "soul.md"
+        if soul_path.exists():
+            return soul_path.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    return None
 
 
 def _format_tool_list(tools: ToolRegistry | None) -> str:
@@ -70,7 +85,14 @@ def build_system_prompt(
     Returns:
         The fully rendered system prompt.
     """
-    parts = [BASE_PROMPT.format(cwd=cwd)]
+    # Load soul.md or use default base prompt
+    soul_content = _load_soul_md()
+    if soul_content is not None:
+        base_prompt = soul_content.format(cwd=cwd)
+    else:
+        base_prompt = DEFAULT_BASE_PROMPT.format(cwd=cwd)
+    
+    parts = [base_prompt]
     if tools is not None:
         parts.append("You have access to these tools:\n")
         parts.append(_format_tool_list(tools))
