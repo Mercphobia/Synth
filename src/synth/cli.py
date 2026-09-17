@@ -15,6 +15,7 @@ from synth.agent import Agent, AgentConfig, AgentError, RunResult
 from synth.config import ConfigError, load_config
 from synth.cron_cli import handle_cron_command, setup_cron_parser
 from synth.daemon import main_daemon
+from synth.dx import run_config, run_doctor, run_init
 from synth.llm import LLMClient, LLMError
 from synth.longtask import LongTaskStore, TaskPlanner
 from synth.modes import resolve_mode, tool_filter
@@ -34,6 +35,11 @@ EXIT_ARG = 2
 EXIT_CONFIG = 3
 EXIT_LLM = 4
 EXIT_TOOL = 5
+# Spec 11 exit codes 6-9 (added with the v1.0 security/sandbox features).
+EXIT_SECURITY = 6      # security violation (e.g. godmode denied, audit block)
+EXIT_SANDBOX = 7       # sandbox error
+EXIT_PERMISSION = 8    # permission denied
+EXIT_CANCELLED = 9     # cancelled by user (SIGINT)
 
 THINKING_PREFIX = "∿ thinking..."
 
@@ -135,6 +141,23 @@ def _dispatch_command(argv: list[str]) -> int:
         parser.add_argument("--steps", default=None, help="Comma-separated step descriptions")
         args = parser.parse_args(rest)
         return _run_task_command(args)
+
+    if command == "doctor":
+        return run_doctor(console)
+
+    if command == "init":
+        parser = argparse.ArgumentParser(prog="synth init")
+        parser.add_argument("--force", action="store_true", help="Overwrite AGENTS.md")
+        args = parser.parse_args(rest)
+        return run_init(console, force=args.force)
+
+    if command == "config":
+        parser = argparse.ArgumentParser(prog="synth config")
+        parser.add_argument("action", choices=["path", "get", "set"])
+        parser.add_argument("key", nargs="?", default=None)
+        parser.add_argument("value", nargs="?", default=None)
+        args = parser.parse_args(rest)
+        return run_config(console, args.action, args.key, args.value)
 
     console.print(f"[red]Error:[/red] unknown command: {command}")
     return EXIT_ARG
@@ -247,7 +270,8 @@ def main(argv: list[str] | None = None) -> int:
     # (a shared argparse subparser conflicts with 'prompt', so commands are
     # detected as the first argv token instead).
     argv = list(argv) if argv is not None else sys.argv[1:]
-    if argv and argv[0] in {"cron", "scan", "daemon", "models", "task"}:
+    if argv and argv[0] in {"cron", "scan", "daemon", "models", "task", "doctor",
+                            "init", "config"}:
         return _dispatch_command(argv)
 
     parser = build_parser()
@@ -404,6 +428,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result: RunResult = agent.run(args.prompt, history)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Cancelled by user.[/yellow]")
+        store.close()
+        return EXIT_CANCELLED
     except LLMError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         return EXIT_LLM
