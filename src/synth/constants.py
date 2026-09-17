@@ -55,3 +55,16 @@ SESSION_DB_FILENAME = "sessions.db"
 DEFAULT_MODEL = "claude-sonnet-4-5"
 DEFAULT_API_KEY_ENV_ANTHROPIC = "ANTHROPIC_API_KEY"
 DEFAULT_API_KEY_ENV_OPENAI = "OPENAI_API_KEY"
+
+# --- Session extras (session_extras.py) ---
+
+# spec #80: default watch polling interval in seconds. 2s balances
+# responsiveness against CPU cost on battery-constrained devices.
+WATCH_INTERVAL_DEFAULT = 2.0
+
+# spec #127: default cap on fuzzy-search result count. 10 fits one screen.
+FUZZY_LIMIT_DEFAULT = 10
+
+# spec #73: character cap for timeline message previews. 80 chars is one
+# terminal line at standard width.
+TIMELINE_PREVIEW_CHARS = 80
