@@ -19,6 +19,7 @@ from synth.cost import CostError, CostTracker
 from synth.cron_cli import handle_cron_command, setup_cron_parser
 from synth.daemon import main_daemon
 from synth.dx import run_config, run_doctor, run_init
+from synth.git_integration import Git, GitError
 from synth.llm import LLMClient, LLMError
 from synth.longtask import LongTaskStore, TaskPlanner
 from synth.modes import resolve_mode, tool_filter
@@ -479,7 +480,8 @@ def main(argv: list[str] | None = None) -> int:
     # detected as the first argv token instead).
     argv = list(argv) if argv is not None else sys.argv[1:]
     if argv and argv[0] in {"cron", "scan", "daemon", "models", "task", "doctor",
-                            "init", "config", "chat", "cost", "best-of-n"}:
+                            "init", "config", "chat", "cost", "best-of-n",
+                            "session", "git"}:
         return _dispatch_command(argv)
 
     parser = build_parser()
