@@ -52,11 +52,15 @@ class Agent:
         session_id: str,
         config: AgentConfig | None = None,
         output_handler: Any = None,
+        memory_block: str = "",
+        mode_suffix: str = "",
     ) -> None:
         """Wire the agent to its collaborators.
 
         Args:
             output_handler: Optional callable(str) for tool-call display.
+            memory_block: Optional memory text injected into the system prompt.
+            mode_suffix: Optional mode instructions appended to the system prompt.
         """
         self.llm = llm
         self.tools = tools
@@ -64,6 +68,8 @@ class Agent:
         self.session_id = session_id
         self.config = config or AgentConfig()
         self.output_handler = output_handler
+        self.memory_block = memory_block
+        self.mode_suffix = mode_suffix
         self.messages: list[dict[str, Any]] = []
 
     def run(self, user_prompt: str, history: list[Message] | None = None) -> RunResult:
@@ -84,7 +90,13 @@ class Agent:
 
         import os
 
-        self.messages = [self._system_message(os.getcwd())]
+        self.messages = [
+            self._system_message(
+                os.getcwd(),
+                memory_block=self.memory_block,
+                mode_suffix=self.mode_suffix,
+            )
+        ]
         if history:
             for msg in history:
                 self.messages.append(self._history_to_dict(msg))
@@ -129,8 +141,18 @@ class Agent:
 
     # --- message helpers ---
 
-    def _system_message(self, cwd: str) -> dict[str, Any]:
-        return {"role": "system", "content": build_system_prompt(cwd)}
+    def _system_message(
+        self, cwd: str, memory_block: str = "", mode_suffix: str = ""
+    ) -> dict[str, Any]:
+        return {
+            "role": "system",
+            "content": build_system_prompt(
+                cwd,
+                tools=self.tools,
+                mode_suffix=mode_suffix,
+                memory_block=memory_block,
+            ),
+        }
 
     def _history_to_dict(self, msg: Message) -> dict[str, Any]:
         """Rebuild one history row into an API message."""

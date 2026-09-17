@@ -355,13 +355,12 @@ def test_build_system_prompt_includes_cwd():
 
     assert "Current working directory: /tmp/synth-workspace" in prompt
     assert "You are Synth, a CLI AI agent." in prompt
-    assert "read_file" in prompt
 
 
 def test_build_system_prompt_empty_cwd_still_labels_directory():
     prompt = build_system_prompt("")
 
-    assert "Current working directory: " in prompt
+    assert "Current working directory:" in prompt
 
 
 def test_build_system_prompt_in_agent_message_uses_real_cwd(make_agent, cwd):

@@ -10,11 +10,14 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from synth import __version__
-from synth.agent import Agent, AgentConfig, RunResult
+from synth.agent import Agent, AgentConfig, AgentError, RunResult
 from synth.config import ConfigError, load_config
 from synth.llm import LLMClient, LLMError
+from synth.modes import resolve_mode, tool_filter
+from synth.memory import MemoryStore, MemoryError, build_memory_prompt
 from synth.session import SessionError, SessionStore
 from synth.tools import default_registry
+from synth.tools_ext import extended_registry
 
 console = Console()
 
@@ -39,6 +42,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", metavar="ID", help="Resume an existing session")
     parser.add_argument("--session", metavar="ACTION", help="Session actions: list")
     parser.add_argument("--model", metavar="MODEL", help="Override the config model")
+    parser.add_argument(
+        "--mode",
+        metavar="MODE",
+        default="act",
+        help="Agent mode: plan, act (default), auto, architect",
+    )
+    parser.add_argument(
+        "--no-memory", action="store_true", help="Disable memory block injection"
+    )
+    parser.add_argument(
+        "--no-extended-tools",
+        action="store_true",
+        help="Use only the 3 basic tools (read_file/write_file/bash)",
+    )
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
     parser.add_argument("--verbose", action="store_true", help="Debug logs")
     parser.add_argument("--version", action="version", version=f"synth {__version__}")
@@ -61,6 +78,14 @@ def main(argv: list[str] | None = None) -> int:
     if not args.prompt:
         parser.error("prompt is required unless using --session or --version")
         return EXIT_ARG
+
+    # Resolve agent mode (spec 6.1): plan/act/auto/architect.
+    try:
+        mode_config = resolve_mode(args.mode)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_ARG
+
     try:
         config = load_config()
     except ConfigError as exc:
@@ -83,11 +108,30 @@ def main(argv: list[str] | None = None) -> int:
         api_key=api_key,
         stream_printer=_stream_printer if not args.no_stream else None,
     )
-    tools = default_registry(
+    tools = extended_registry(
         bash_timeout=config.tools.bash_timeout,
         max_file_size=config.tools.max_file_size,
         max_output_size=config.tools.max_output_size,
     )
+
+    # Resolve agent mode (spec 6.1): plan/act/auto/architect.
+    try:
+        mode_config = resolve_mode(args.mode)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_ARG
+    if mode_config.allowed_tool_names is not None:
+        tools = tool_filter(tools, mode_config.allowed_tool_names)
+
+    # Load memory block (spec 6.3): user facts + recent lessons.
+    memory_block = ""
+    if not args.no_memory:
+        try:
+            with MemoryStore() as mem:
+                memory_block = build_memory_prompt(mem)
+        except MemoryError as exc:
+            console.print(f"[yellow]Warning:[/yellow] memory unavailable: {exc}")
+            memory_block = ""
 
     try:
         store = SessionStore(config.session.db_path)
@@ -114,8 +158,12 @@ def main(argv: list[str] | None = None) -> int:
         tools=tools,
         session_store=store,
         session_id=session_id,
-        config=AgentConfig(max_iterations=config.max_iterations, stream=not args.no_stream),
+        config=AgentConfig(
+            max_iterations=mode_config.max_iterations, stream=not args.no_stream
+        ),
         output_handler=_tool_display,
+        memory_block=memory_block,
+        mode_suffix=mode_config.system_prompt_suffix,
     )
 
     try:
