@@ -12,7 +12,10 @@ from rich.markdown import Markdown
 
 from synth import __version__
 from synth.agent import Agent, AgentConfig, AgentError, RunResult
+from synth.best_of_n import BestOfN
+from synth.chat import Repl
 from synth.config import ConfigError, load_config
+from synth.cost import CostError, CostTracker
 from synth.cron_cli import handle_cron_command, setup_cron_parser
 from synth.daemon import main_daemon
 from synth.dx import run_config, run_doctor, run_init
@@ -145,6 +148,24 @@ def _dispatch_command(argv: list[str]) -> int:
     if command == "doctor":
         return run_doctor(console)
 
+    if command == "chat":
+        return _run_chat()
+
+    if command == "cost":
+        parser = argparse.ArgumentParser(prog="synth cost")
+        parser.add_argument("--today", action="store_true", help="Show today only")
+        parser.add_argument("--month", action="store_true", help="Show month total")
+        args = parser.parse_args(rest)
+        return _run_cost(args)
+
+    if command == "best-of-n":
+        parser = argparse.ArgumentParser(prog="synth best-of-n")
+        parser.add_argument("prompt", nargs="+")
+        parser.add_argument("--models", required=True,
+                            help="Comma-separated model names to compare")
+        args = parser.parse_args(rest)
+        return _run_best_of_n(" ".join(args.prompt), args.models)
+
     if command == "init":
         parser = argparse.ArgumentParser(prog="synth init")
         parser.add_argument("--force", action="store_true", help="Overwrite AGENTS.md")
@@ -161,6 +182,100 @@ def _dispatch_command(argv: list[str]) -> int:
 
     console.print(f"[red]Error:[/red] unknown command: {command}")
     return EXIT_ARG
+
+
+def _run_chat() -> int:
+    """Interactive REPL (spec 6.12: synth chat)."""
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_CONFIG
+
+    # Resolve API key once; each agent turn reuses the same client.
+    try:
+        api_key = config.resolve_api_key()
+    except ConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_CONFIG
+
+    llm = LLMClient(model=config.model, api_key=api_key, stream_printer=_stream_printer)
+    tools = extended_registry(
+        bash_timeout=config.tools.bash_timeout,
+        max_file_size=config.tools.max_file_size,
+        max_output_size=config.tools.max_output_size,
+    )
+    try:
+        store = SessionStore(config.session.db_path)
+    except SessionError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_GENERAL
+
+    def factory(session_id: str) -> Agent:
+        return Agent(
+            llm=llm,
+            tools=tools,
+            session_store=store,
+            session_id=session_id,
+            config=AgentConfig(max_iterations=config.max_iterations, stream=True),
+            output_handler=_tool_display,
+        )
+
+    try:
+        return Repl(agent_factory=factory, store=store).run()
+    finally:
+        store.close()
+
+
+def _run_cost(args: argparse.Namespace) -> int:
+    """Show token/cost usage (spec 8.7: synth cost)."""
+    try:
+        with CostTracker() as tracker:
+            if args.today:
+                console.print(f"Today: ${tracker.get_daily_cost():.4f}")
+                return EXIT_OK
+            if args.month:
+                console.print(f"Month: ${tracker.get_monthly_cost():.4f}")
+                return EXIT_OK
+            console.print(f"Today:  ${tracker.get_daily_cost():.4f}")
+            console.print(f"Month:  ${tracker.get_monthly_cost():.4f}")
+            console.print(f"Total:  ${tracker.get_total_cost():.4f}")
+    except CostError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_GENERAL
+    return EXIT_OK
+
+
+def _run_best_of_n(prompt: str, models_csv: str) -> int:
+    """Run the prompt across N models and keep the best (spec 6.1 #7)."""
+    try:
+        config = load_config()
+        api_key = config.resolve_api_key()
+    except ConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_CONFIG
+
+    models = [m.strip() for m in models_csv.split(",") if m.strip()]
+    if len(models) < 2:
+        console.print("[red]Error:[/red] --models needs at least 2 comma-separated models")
+        return EXIT_ARG
+
+    clients = {
+        model: LLMClient(model=model, api_key=api_key, stream=False)
+        for model in models
+    }
+    try:
+        result = BestOfN(clients).run(prompt)
+    except (ValueError, RuntimeError) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_LLM
+
+    for cand in result.candidates:
+        marker = "[green]★[/green]" if cand.model == result.best.model else " "
+        console.print(f"  {marker} {cand.model:<32} score={cand.score:.2f}")
+    console.print()
+    console.print(Markdown(result.best.text))
+    return EXIT_OK
 
 
 def _run_security_scan(root: Path, as_markdown: bool) -> int:
@@ -271,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
     # detected as the first argv token instead).
     argv = list(argv) if argv is not None else sys.argv[1:]
     if argv and argv[0] in {"cron", "scan", "daemon", "models", "task", "doctor",
-                            "init", "config"}:
+                            "init", "config", "chat", "cost", "best-of-n"}:
         return _dispatch_command(argv)
 
     parser = build_parser()
