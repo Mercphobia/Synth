@@ -214,6 +214,10 @@ def _dispatch_command(argv: list[str]) -> int:
         args = parser.parse_args(rest)
         return _run_snapshot_command(args)
 
+    if command == "serve":
+        from synth.rpc_server import serve
+        return serve()
+
     console.print(f"[red]Error:[/red] unknown command: {command}")
     return EXIT_ARG
 
@@ -535,7 +539,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(argv) if argv is not None else sys.argv[1:]
     if argv and argv[0] in {"cron", "scan", "daemon", "models", "task", "doctor",
                             "init", "config", "chat", "cost", "best-of-n",
-                            "session", "git", "snapshot"}:
+                            "session", "git", "snapshot", "serve"}:
         return _dispatch_command(argv)
 
     parser = build_parser()

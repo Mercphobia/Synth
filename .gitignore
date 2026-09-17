@@ -7,3 +7,6 @@ build/
 .coverage
 htmlcov/
 .pytest_cache/
+cli/node_modules/
+cli/dist/
+cli/package-lock.json
