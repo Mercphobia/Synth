@@ -242,6 +242,71 @@ class CheckpointStore:
                 f"Failed to restore checkpoint {checkpoint_id}: {exc}"
             ) from exc
 
+    def restore_session(self, checkpoint_id: str) -> int:
+        """Replace a session's live messages with a checkpoint's snapshot.
+
+        The target session is the one the checkpoint was taken from. All
+        existing messages for that session are removed and the snapshot's
+        messages re-inserted (spec 6.6 #72 snapshot restore).
+
+        Returns:
+            Number of messages restored.
+
+        Raises:
+            CheckpointError: If the checkpoint or sessions DB is missing,
+                or the write fails.
+        """
+        try:
+            cur = self._conn.execute(
+                "SELECT session_id, messages FROM checkpoints WHERE id = ?",
+                (checkpoint_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise CheckpointError(f"Checkpoint not found: {checkpoint_id}")
+            session_id = row["session_id"]
+            messages = self._deserialize(bytes(row["messages"]))
+        except sqlite3.Error as exc:
+            raise CheckpointError(
+                f"Failed to read checkpoint {checkpoint_id}: {exc}"
+            ) from exc
+
+        sessions_db = self.db_path.parent / "sessions.db"
+        if not sessions_db.exists():
+            raise CheckpointError(f"Sessions DB not found: {sessions_db}")
+        try:
+            conn = sqlite3.connect(str(sessions_db))
+            try:
+                conn.execute("BEGIN")
+                conn.execute(
+                    "DELETE FROM messages WHERE session_id = ?", (session_id,)
+                )
+                for msg in messages:
+                    conn.execute(
+                        "INSERT INTO messages "
+                        "(session_id, role, content, tool_calls, tool_call_id, ts) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            session_id,
+                            msg.role,
+                            msg.content,
+                            getattr(msg, "tool_calls", None),
+                            getattr(msg, "tool_call_id", None),
+                            getattr(msg, "ts", 0) or int(time.time()),
+                        ),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            raise CheckpointError(
+                f"Failed to restore session {session_id}: {exc}"
+            ) from exc
+        return len(messages)
+
     def list_checkpoints(self, session_id: str) -> list[dict]:
         """Return metadata for every checkpoint of a session, newest first.
 

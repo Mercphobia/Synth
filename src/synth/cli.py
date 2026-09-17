@@ -205,8 +205,62 @@ def _dispatch_command(argv: list[str]) -> int:
         args = parser.parse_args(rest)
         return _run_git_command(args)
 
+    if command == "snapshot":
+        parser = argparse.ArgumentParser(prog="synth snapshot")
+        parser.add_argument("action", choices=["create", "list", "restore"])
+        parser.add_argument("arg", nargs="?", default=None,
+                            help="session id (create/list) or checkpoint id (restore)")
+        parser.add_argument("--tag", default="", help="label for a new snapshot")
+        args = parser.parse_args(rest)
+        return _run_snapshot_command(args)
+
     console.print(f"[red]Error:[/red] unknown command: {command}")
     return EXIT_ARG
+
+
+def _run_snapshot_command(args: argparse.Namespace) -> int:
+    """Handle 'synth snapshot create|list|restore' (spec 6.6 #72)."""
+    from synth.checkpoints import CheckpointError, CheckpointStore
+
+    try:
+        store = CheckpointStore()
+    except CheckpointError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_GENERAL
+    try:
+        if args.action == "create":
+            if not args.arg:
+                console.print("[red]Error:[/red] session id required")
+                return EXIT_ARG
+            ckpt_id = store.create_checkpoint(args.arg, args.tag)
+            console.print(f"[green]✓[/green] snapshot {ckpt_id[:8]} (tag: {args.tag or '-'})")
+            return EXIT_OK
+        if args.action == "list":
+            if not args.arg:
+                console.print("[red]Error:[/red] session id required")
+                return EXIT_ARG
+            rows = store.list_checkpoints(args.arg)
+            if not rows:
+                console.print("No snapshots for this session.")
+                return EXIT_OK
+            for row in rows:
+                console.print(f"  {row['id']}  {row['created_at']}  {row['tag'] or '-'}")
+            return EXIT_OK
+        if args.action == "restore":
+            if not args.arg:
+                console.print("[red]Error:[/red] checkpoint id required")
+                return EXIT_ARG
+            count = store.restore_session(args.arg)
+            console.print(f"[green]✓[/green] restored {count} message(s) into the "
+                          f"snapshot's session — resume it with: synth --resume <id>")
+            return EXIT_OK
+    except CheckpointError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_GENERAL
+    finally:
+        store.close()
+    return EXIT_ARG
+
 
 
 def _run_session_command(args: argparse.Namespace) -> int:
@@ -481,7 +535,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(argv) if argv is not None else sys.argv[1:]
     if argv and argv[0] in {"cron", "scan", "daemon", "models", "task", "doctor",
                             "init", "config", "chat", "cost", "best-of-n",
-                            "session", "git"}:
+                            "session", "git", "snapshot"}:
         return _dispatch_command(argv)
 
     parser = build_parser()

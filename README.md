@@ -59,11 +59,34 @@ and never stores keys on disk.
 
 ```bash
 synth [PROMPT] [--resume ID] [--session ACTION] [--model MODEL]
-      [--no-stream] [--verbose] [--version]
+      [--mode MODE] [--godmode] [--caveman] [--no-rtk] [--no-stream]
+      [--checkpoint TAG] [--undo] [--swarm] [--verbose] [--version]
 ```
 
-The `PROMPT` is the task. It is required unless you pass `--session`,
-`--version`, or `-h`.
+The `PROMPT` is the task. It is required unless you pass a subcommand,
+`--session`, `--version`, or `-h`.
+
+### Subcommands
+
+| Command | Description |
+|---|---|
+| `synth chat` | Interactive REPL with `/help`, `/new`, `/session`, `/exit`. Prints a session summary on exit. |
+| `synth cost [--today\|--month]` | Token/cost report from the cost tracker. |
+| `synth best-of-n "task" --models a,b,c` | Run a prompt across N models, score, pick best. |
+| `synth doctor` | Environment health check (Python, config, API key, DB, git, Ollama, disk). |
+| `synth init [--force]` | Generate `AGENTS.md` project guide. |
+| `synth config path\|get\|set` | Edit `~/.synth/config.toml` by dotted key. |
+| `synth scan [PATH] [--markdown]` | Security audit: secrets, SAST, CVE, OWASP. |
+| `synth session search "query"` | FTS5 full-text search across session history. |
+| `synth session export <id> --format json\|md\|html [--out FILE]` | Export a session. |
+| `synth snapshot create <session> [--tag LABEL]` | Create a checkpoint snapshot. |
+| `synth snapshot list <session>` | List snapshots for a session. |
+| `synth snapshot restore <checkpoint>` | Restore a snapshot into the live session. |
+| `synth git status\|diff\|commit\|log\|review` | Git integration (auto-commit, diff, secret-warn). |
+| `synth models list\|available\|install\|uninstall\|status` | Ollama model management. |
+| `synth task list\|create\|status\|delete` | Long-horizon task tracking. |
+| `synth cron add\|remove\|list\|enable\|disable\|run` | Cron job scheduler. |
+| `synth daemon start\|stop\|status` | Background daemon with task queue + health check. |
 
 ### Examples for every flag
 
@@ -242,14 +265,35 @@ automatically on first use; the schema is migrated on open.
 
 ## Tools
 
-The MVP ships three tools. Every tool returns errors as text instead of
+Synth ships **8 tools**. Every tool returns errors as text instead of
 raising — the model sees the failure and can change approach.
 
-| Tool        | Arguments                | Notes                                                    |
-|-------------|--------------------------|----------------------------------------------------------|
-| `read_file` | `path`                   | Reads text (UTF-8, invalid bytes replaced).              |
-| `write_file`| `path`, `content`        | Creates parent dirs; **overwrites** existing files.      |
-| `bash`      | `command`                | Runs via `shell=True` in the current working directory.  |
+| Tool        | Arguments                          | Notes                                                    |
+|-------------|------------------------------------|----------------------------------------------------------|
+| `read_file` | `path`                             | Reads text (UTF-8, invalid bytes replaced).              |
+| `write_file`| `path`, `content`                  | Creates parent dirs; **overwrites** existing files.     |
+| `bash`      | `command`                          | Runs via `shell=True` in the current working directory.  |
+| `edit_file` | `path`, `old_string`, `new_string` | Patch-style edit; old_string must be unique in file.     |
+| `glob`      | `pattern`, `path?`                 | Find files matching a glob pattern (supports `**`).       |
+| `grep`      | `pattern`, `path?`, `include?`     | Regex search inside files, ripgrep-style output.         |
+| `web_fetch` | `url`, `method?`                   | HTTP GET/POST with SSRF guards (no private IPs by default). |
+| `web_search`| `query`, `limit?`                  | DuckDuckGo HTML search; no API keys needed.              |
+
+### Modes
+
+| Mode | Behavior | Flag |
+|---|---|---|
+| `plan` | Reason only, no tool execution (40 iterations) | `--mode plan` |
+| `act` | Default: read, write, edit, run commands (20 iter) | `--mode act` |
+| `auto` | Maximum autonomy, finish end-to-end (50 iter) | `--mode auto` |
+| `architect` | Design docs only, read-only tools (15 iter) | `--mode architect` |
+
+### Godmode
+
+`--godmode` disables all safety boundaries: path traversal guard, file size
+limits, output truncation, and bash timeout. Use with **extreme caution** and
+only with trusted models in isolated environments. With `GODMODE=1` set,
+every tool operates unrestricted.
 
 ### Limits
 
@@ -286,10 +330,10 @@ Guards that are present in the MVP:
 | 3    | Config error — including a **missing API key**.|
 | 4    | LLM error (auth failure, or retries exhausted).|
 | 5    | Tool error (a tool failed terminally).         |
-
-Codes 6–9 from the full spec (security violation, sandbox error, permission
-denied, cancelled by user) are **not used in the MVP** — the features behind
-them don't exist yet.
+| 6    | Security violation (e.g. audit block).          |
+| 7    | Sandbox error.                                  |
+| 8    | Permission denied.                              |
+| 9    | Cancelled by user (Ctrl-C / SIGINT).           |
 
 ---
 

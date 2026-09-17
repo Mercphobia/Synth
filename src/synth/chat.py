@@ -2,6 +2,7 @@
 
 A plain input loop around the agent: type a prompt, get a turn, repeat.
 Slash commands keep the session alive across turns (shared history).
+On exit, a session summary is printed (spec 6.6 #78).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from rich.markdown import Markdown
 from synth.agent import Agent, AgentConfig, AgentError
 from synth.llm import LLMError
 from synth.session import Message, SessionStore
+from synth.session_plus import build_exit_summary
 
 console = Console()
 
@@ -71,6 +73,7 @@ class Repl:
     def run(self) -> int:
         """Run the loop until exit/EOF. Returns the process exit code."""
         console.print("[bold]Synth chat[/bold] — type a task; /help for commands.")
+        turns = 0
         while True:
             line = self._read_line("[cyan]>[/cyan] ")
             if line is None:
@@ -102,10 +105,16 @@ class Repl:
                 console.print(f"[red]Error:[/red] {exc}")
                 continue
 
+            turns += 1
             if result.error:
                 console.print(f"[yellow]{result.error}[/yellow]")
             if result.text:
                 console.print(Markdown(result.text))
             # Reload persisted history so the next turn carries full context.
             self.history = self.store.load_session(self.session_id)
+
+        # Summary on exit (spec 6.6 #78).
+        if turns:
+            summary = build_exit_summary(self.history)
+            console.print(f"[dim]{summary}[/dim]")
         return 0
