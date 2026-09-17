@@ -300,13 +300,19 @@ class SkillExecutor:
     def validate_code(self, code: str) -> bool:
         """Return True when code passes static safety checks.
 
-        Rejects: dangerous builtins, lines over MAX_SKILL_LINES, and code
-        that cannot be compiled. The check is heuristic — it catches the
-        common attack vectors, not every possible exploit.
+        Rejects: import statements, dangerous builtins, lines over
+        MAX_SKILL_LINES, and code that cannot be compiled. The check is
+        heuristic — it catches the common attack vectors, not every possible
+        exploit.
         """
         if not isinstance(code, str) or not code.strip():
             return False
         if len(code.splitlines()) > MAX_SKILL_LINES:
+            return False
+        # Imports are the main escape from the restricted environment.
+        if re.search(r"^\s*(import|from)\s+\w", code, re.MULTILINE):
+            return False
+        if "__" in code:  # dunder access (__class__, __globals__, ...)
             return False
         for bad in BLOCKED_BUILTINS:
             # Match whole-token usage; substring matches in identifiers are OK.
@@ -519,19 +525,63 @@ def _parse_minimal_yaml(text: str) -> dict[str, Any]:
 
 
 def _parse_inline_mapping(line: str) -> dict[str, Any]:
-    """Parse a line like '  - {path: foo.txt, content: hi}' into a dict."""
-    import re
+    """Parse a line like '  - {action: x, args: {path: a.txt}}' into a dict.
 
-    body = line.lstrip().lstrip("- ").strip()
-    if body.startswith("{") and body.endswith("}"):
-        body = body[1:-1]
+    Brace-aware: nested {..} values are parsed recursively, and commas
+    inside nested braces do not split pairs.
+    """
+    body = line.strip()
+    if body.startswith("- "):
+        body = body[2:].strip()
+    parsed = _parse_mapping_body(body)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"expected a mapping, got: {line!r}")
+    return parsed
+
+
+def _split_top_level(body: str) -> list[str]:
+    """Split 'a: 1, b: {c: 2, d: 3}' on commas outside braces."""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in body:
+        if ch == "{":
+            depth += 1
+            current.append(ch)
+        elif ch == "}":
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if "".join(current).strip():
+        parts.append("".join(current))
+    return parts
+
+
+def _parse_mapping_body(text: str) -> dict[str, Any]:
+    """Parse '{k: v, ...}' (braces optional at top level) into a dict."""
+    text = text.strip()
+    if text.startswith("{") and text.endswith("}"):
+        text = text[1:-1]
     out: dict[str, Any] = {}
-    for pair in re.split(r",\s*", body):
+    for pair in _split_top_level(text):
         if not pair.strip():
             continue
-        k, _, v = pair.partition(":")
-        out[k.strip()] = _parse_scalar(v.strip())
+        k, sep, v = pair.partition(":")
+        if not sep:
+            raise ValueError(f"expected 'key: value', got {pair!r}")
+        out[k.strip()] = _parse_value(v.strip())
     return out
+
+
+def _parse_value(value: str) -> Any:
+    """Parse a scalar or nested mapping value."""
+    if value.startswith("{"):
+        return _parse_mapping_body(value)
+    return _parse_scalar(value)
 
 
 def _parse_scalar(value: str) -> Any:

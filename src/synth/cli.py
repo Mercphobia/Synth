@@ -26,8 +26,11 @@ from synth.memory import MemoryStore, MemoryError, build_memory_prompt
 from synth.model_manager import ManagerError, ModelManager
 from synth.security import full_scan, report_to_markdown
 from synth.session import SessionError, SessionStore
-from synth.tools import default_registry
+from synth.session_plus import SessionExporter, SessionPlusError, SessionSearch
+from synth.tools import ToolSpec, default_registry
 from synth.tools_ext import extended_registry
+from synth.token_efficiency import Caveman, RtkFilter
+from synth.web_tools import WEB_FETCH_SCHEMA, WEB_SEARCH_SCHEMA, make_web_fetch_tool, make_web_search_tool
 
 console = Console()
 
@@ -84,6 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable multi-agent supervisor mode",
     )
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
+    parser.add_argument("--caveman", action="store_true",
+                        help="Terse output mode (spec 8.4): compress the final answer")
+    parser.add_argument("--no-rtk", action="store_true",
+                        help="Disable RTK shell-output compression (spec 8.3)")
     parser.add_argument("--verbose", action="store_true", help="Debug logs")
     parser.add_argument("--version", action="version", version=f"synth {__version__}")
     return parser
@@ -180,8 +187,94 @@ def _dispatch_command(argv: list[str]) -> int:
         args = parser.parse_args(rest)
         return run_config(console, args.action, args.key, args.value)
 
+    if command == "session":
+        parser = argparse.ArgumentParser(prog="synth session")
+        parser.add_argument("action", choices=["search", "export"])
+        parser.add_argument("arg", help="query for search, session id for export")
+        parser.add_argument("--format", choices=["json", "md", "html"], default="md")
+        parser.add_argument("--out", default=None, help="output file for export")
+        args = parser.parse_args(rest)
+        return _run_session_command(args)
+
+    if command == "git":
+        parser = argparse.ArgumentParser(prog="synth git")
+        parser.add_argument("action", choices=["status", "diff", "commit", "log", "review"])
+        parser.add_argument("--message", "-m", default=None)
+        parser.add_argument("--limit", type=int, default=20)
+        args = parser.parse_args(rest)
+        return _run_git_command(args)
+
     console.print(f"[red]Error:[/red] unknown command: {command}")
     return EXIT_ARG
+
+
+def _run_session_command(args: argparse.Namespace) -> int:
+    """Handle 'synth session search|export' (spec 6.6 #70/#77)."""
+    if args.action == "search":
+        try:
+            with SessionSearch() as searcher:
+                hits = searcher.search(args.arg)
+                backend = "fts5" if searcher.fts5_available() else "LIKE"
+        except (SessionPlusError, ValueError) as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            return EXIT_GENERAL
+        if not hits:
+            console.print(f"No matches ({backend}).")
+            return EXIT_OK
+        console.print(f"[bold]{len(hits)} match(es)[/bold] ({backend}):")
+        for hit in hits:
+            console.print(f"  {hit['session_id'][:8]}  [{hit['role']}] {hit['snippet'][:100]}")
+        return EXIT_OK
+
+    # export
+    out = args.out or f"session-{args.arg[:8]}.{args.format}"
+    try:
+        with SessionExporter() as exporter:
+            if args.format == "json":
+                path = exporter.export_json(args.arg, out)
+            elif args.format == "html":
+                path = exporter.export_html(args.arg, out)
+            else:
+                path = exporter.export_markdown(args.arg, out)
+    except SessionPlusError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_GENERAL
+    console.print(f"[green]✓[/green] exported to {path}")
+    return EXIT_OK
+
+
+def _run_git_command(args: argparse.Namespace) -> int:
+    """Handle 'synth git ...' (spec 6.8)."""
+    git = Git()
+    try:
+        if not git.available():
+            console.print("[red]Error:[/red] git not installed")
+            return EXIT_GENERAL
+        if not git.is_repo():
+            console.print("[red]Error:[/red] not a git repository (fix: git init)")
+            return EXIT_GENERAL
+        if args.action == "status":
+            st = git.status()
+            for bucket, files in st.items():
+                for f in files:
+                    console.print(f"  {bucket:<9} {f}")
+            if not any(st.values()):
+                console.print("clean")
+        elif args.action == "diff":
+            console.print(git.diff_stat() or "(no changes)")
+        elif args.action == "commit":
+            msg = args.message or "synth: auto-commit"
+            sha = git.auto_commit(msg)
+            console.print(f"[green]✓[/green] committed {sha[:8]}" if sha else "nothing to commit")
+        elif args.action == "log":
+            for entry in git.log(limit=args.limit):
+                console.print(f"  {entry['sha'][:8]} {entry['subject']}")
+        elif args.action == "review":
+            console.print(git.code_review() or "No changes to review.")
+    except GitError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        return EXIT_GENERAL
+    return EXIT_OK
 
 
 def _run_chat() -> int:
@@ -445,6 +538,20 @@ def main(argv: list[str] | None = None) -> int:
         max_file_size=config.tools.max_file_size,
         max_output_size=config.tools.max_output_size,
     )
+    # Spec 6.2 #23/#24: web tools on the default registry.
+    tools.register(
+        ToolSpec(name="web_fetch",
+                 description="Fetch content from a URL (http/https only, SSRF-guarded)",
+                 parameters=WEB_FETCH_SCHEMA,
+                 func=make_web_fetch_tool(max_bytes=config.tools.max_file_size,
+                                          timeout=config.tools.bash_timeout))
+    )
+    tools.register(
+        ToolSpec(name="web_search",
+                 description="Search the web; returns numbered title/url/snippet results",
+                 parameters=WEB_SEARCH_SCHEMA,
+                 func=make_web_search_tool(max_output_size=config.tools.max_output_size))
+    )
 
     # Resolve agent mode (spec 6.1): plan/act/auto/architect.
     try:
@@ -539,6 +646,9 @@ def main(argv: list[str] | None = None) -> int:
         output_handler=_tool_display,
         memory_block=memory_block,
         mode_suffix=mode_config.system_prompt_suffix,
+        rtk_filter=None if args.no_rtk else RtkFilter(
+            max_output_tokens=config.tools.max_output_size
+        ),
     )
 
     try:
@@ -561,7 +671,13 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_TOOL
 
     if result.text:
-        console.print(Markdown(result.text))
+        # Caveman mode (spec 8.4): compress the final answer before display.
+        # Note: with streaming on, the raw tokens already printed; caveman
+        # mainly shines combined with --no-stream.
+        text = result.text
+        if args.caveman:
+            text = Caveman().terse(text)
+        console.print(Markdown(text))
     return EXIT_OK
 
 

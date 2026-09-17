@@ -54,6 +54,7 @@ class Agent:
         output_handler: Any = None,
         memory_block: str = "",
         mode_suffix: str = "",
+        rtk_filter: Any = None,
     ) -> None:
         """Wire the agent to its collaborators.
 
@@ -61,6 +62,8 @@ class Agent:
             output_handler: Optional callable(str) for tool-call display.
             memory_block: Optional memory text injected into the system prompt.
             mode_suffix: Optional mode instructions appended to the system prompt.
+            rtk_filter: Optional RtkFilter (spec 8.3) compressing bash output
+                before it enters the LLM context.
         """
         self.llm = llm
         self.tools = tools
@@ -70,6 +73,7 @@ class Agent:
         self.output_handler = output_handler
         self.memory_block = memory_block
         self.mode_suffix = mode_suffix
+        self.rtk_filter = rtk_filter
         self.messages: list[dict[str, Any]] = []
 
     def run(self, user_prompt: str, history: list[Message] | None = None) -> RunResult:
@@ -197,10 +201,18 @@ class Agent:
         }
 
     def _execute_tool(self, call: ToolCall) -> ToolResult:
-        """Run one tool call and display it."""
+        """Run one tool call, optionally compress its output (spec 8.3)."""
         if self.output_handler is not None:
             self.output_handler("call", call.name, call.args)
         result = self.tools.execute(call.name, call.args)
+        if (
+            self.rtk_filter is not None
+            and call.name == "bash"
+            and not result.is_error
+        ):
+            command = str(call.args.get("command", ""))
+            result = ToolResult(text=self.rtk_filter.filter_output(command, result.text),
+                                is_error=result.is_error)
         if self.output_handler is not None:
             self.output_handler("result", call.name, result.text)
         return result
