@@ -1,0 +1,29 @@
+{
+  "name": "synth-cli",
+  "version": "0.1.0",
+  "description": "CLI AI agent framework - Python-based with local model support",
+  "bin": {
+    "synth": "bin/synth.js"
+  },
+  "scripts": {
+    "postinstall": "node ./bin/install-synth.js"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "ollama",
+    "local-ai"
+  ],
+  "author": "Mercphobia",
+  "license": "MIT",
+  "homepage": "https://github.com/Mercphobia/Synth#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mercphobia/Synth.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Mercphobia/Synth/issues"
+  },
+  "synthVersion": "0.1.0"
+}
