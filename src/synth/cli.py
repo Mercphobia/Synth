@@ -13,6 +13,7 @@ from rich.markdown import Markdown
 from synth import __version__
 from synth.agent import Agent, AgentConfig, AgentError, RunResult
 from synth.config import ConfigError, load_config
+from synth.cron_cli import handle_cron_command, setup_cron_parser
 from synth.llm import LLMClient, LLMError
 from synth.modes import resolve_mode, tool_filter
 from synth.memory import MemoryStore, MemoryError, build_memory_prompt

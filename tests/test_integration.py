@@ -54,10 +54,10 @@ def test_cli_create_file_end_to_end(
     """synth 'create hello.txt' — config bootstraps and the file is written."""
     import synth.cli as cli_mod
 
-    monkeypatch.setattr("sys.argv", ["synth", "create hello.txt with content 'hi'"])
+    # Pass prompt via main() argv parameter, not sys.argv, to avoid subparser conflicts
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    exit_code = cli_mod.main()
+    exit_code = cli_mod.main(["create hello.txt with content 'hi'"])
 
     assert exit_code == EXIT_OK
     created = isolated_home / "hello.txt"
