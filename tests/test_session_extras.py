@@ -30,7 +30,7 @@ from synth.session_extras import (
 def stores(tmp_path: Path) -> tuple[CheckpointStore, SessionStore, str]:
     """Create a CheckpointStore + SessionStore sharing one config dir."""
     cfg = tmp_path / ".synth"
-    cfg.mkdir()
+    cfg.mkdir(exist_ok=True)
     cp_store = CheckpointStore(cfg / "checkpoints.db")
     sess_store = SessionStore(cfg / "sessions.db")
     sess_id = sess_store.create_session(title="test session")
