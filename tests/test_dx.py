@@ -122,7 +122,7 @@ def test_config_set_rejects_invalid_toml_result(console, monkeypatch):
     # Force the validity check to fail.
     monkeypatch.setattr(
         "synth.dx.tomllib.loads",
-        lambda _s: (_ for _ in ()).throw(tomllib.TOMLDecodeError(msg="boom")),
+        lambda _s: (_ for _ in ()).throw(tomllib.TOMLDecodeError("boom", "", 0)),
     )
     rc = run_config(console, "set", "default.model", "y")
     assert rc == 3

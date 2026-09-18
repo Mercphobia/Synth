@@ -413,7 +413,7 @@ def _run_best_of_n(prompt: str, models_csv: str) -> int:
         return EXIT_ARG
 
     clients = {
-        model: LLMClient(model=model, api_key=api_key, stream=False)
+        model: LLMClient(model=model, api_key=api_key)  # no stream for best-of-n
         for model in models
     }
     try:
