@@ -109,20 +109,21 @@ def _dispatch_command(argv: list[str]) -> int:
 
     if command == "cron":
         parser = argparse.ArgumentParser(prog="synth cron")
-        cron_sub = parser.add_subparsers(dest="action", required=True)
+        cron_sub = parser.add_subparsers(dest="cron_command", required=True)
         add_p = cron_sub.add_parser("add")
         add_p.add_argument("expression")
         add_p.add_argument("command", nargs=argparse.REMAINDER)
         rm_p = cron_sub.add_parser("remove")
-        rm_p.add_argument("job_id")
-        cron_sub.add_parser("list")
+        rm_p.add_argument("job_id", type=int)
+        list_p = cron_sub.add_parser("list")
+        list_p.add_argument("--show-disabled", action="store_true")
         en_p = cron_sub.add_parser("enable")
-        en_p.add_argument("job_id")
+        en_p.add_argument("job_id", type=int)
         di_p = cron_sub.add_parser("disable")
-        di_p.add_argument("job_id")
+        di_p.add_argument("job_id", type=int)
         cron_sub.add_parser("run")
         args = parser.parse_args(rest)
-        if args.action == "add":
+        if args.cron_command == "add":
             args.command = " ".join(args.command)
         return handle_cron_command(args)
 
